@@ -9,3 +9,5 @@ Reduce dimensionality using PCA and t-SNE for better visualization.
 Predict customer outcomes (y column) using a Random Forest Classifier.
 
 Evaluate clustering quality using Silhouette Score and Davies-Bouldin Index.
+
+Running the customer_journey_analysis.py file will give us the models required 
