@@ -1,3 +1,4 @@
+#  Import libraries
 import pandas as pd
 import joblib
 import matplotlib.pyplot as plt
@@ -11,90 +12,92 @@ from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.manifold import TSNE
 
-# Load dataset
+#  Load the dataset
 df = pd.read_csv("Dataset/bank-additional-full.csv")
 
-# Drop target for clustering
+#  Drop target for clustering
 X_cluster = df.drop(columns=['y'])
 
-# Preprocessing
+#  Separate numeric and categorical columns
 num_cols = X_cluster.select_dtypes(include=['int64', 'float64']).columns.tolist()
 cat_cols = X_cluster.select_dtypes(include=['object']).columns.tolist()
 
+#  Define preprocessing pipeline
 preprocessor = ColumnTransformer([
     ('num', StandardScaler(), num_cols),
     ('cat', OneHotEncoder(drop='first'), cat_cols)
 ])
 
+#  Apply preprocessing
 X_processed = preprocessor.fit_transform(X_cluster)
 
-# PCA
+#  Dimensionality Reduction using PCA
 pca = PCA(n_components=2)
 X_pca = pca.fit_transform(X_processed)
 
-# K-Means Clustering
-kmeans = KMeans(n_clusters=3, random_state=0)
+#  KMeans Clustering
+kmeans = KMeans(n_clusters=2, random_state=0)
 kmeans_labels = kmeans.fit_predict(X_pca)
 df['KMeans_Cluster'] = kmeans_labels
 
-# DBSCAN Clustering
+#  DBSCAN Clustering
 dbscan = DBSCAN(eps=0.5, min_samples=5)
 dbscan_labels = dbscan.fit_predict(X_pca)
 df['DBSCAN_Cluster'] = dbscan_labels
 
-# Save the preprocessor and clustering models
+#  Save models
 joblib.dump(preprocessor, "Models/preprocessor.pkl")
+joblib.dump(pca, "Models/pca.pkl")
 joblib.dump(kmeans, "Models/kmeans.pkl")
 joblib.dump(dbscan, "Models/dbscan.pkl")
-joblib.dump(pca, "Models/pca.pkl")
 
-# Dimensionality Reduction Visualizations
-plt.figure(figsize=(8, 6))
-sns.scatterplot(x=X_pca[:, 0], y=X_pca[:, 1], hue=kmeans_labels, palette='Set2')
-plt.title('K-Means Clustering - PCA Projection')
-plt.xlabel('Principal Component 1')
-plt.ylabel('Principal Component 2')
-plt.legend(title='Cluster')
+#  Clustering Evaluation
+sil_score_kmeans = silhouette_score(X_pca, kmeans_labels)
+dbi_kmeans = davies_bouldin_score(X_pca, kmeans_labels)
+
+print(f"Silhouette Score for K-Means: {sil_score_kmeans:.2f}")
+print(f"Davies-Bouldin Index for K-Means: {dbi_kmeans:.2f}")
+
+#  Elbow Method for Optimal K
+# wcss = []
+# for k in range(2, 10):
+#     km = KMeans(n_clusters=k, random_state=0)
+#     km.fit(X_pca)
+#     wcss.append(km.inertia_)
+
+# plt.figure(figsize=(8, 5))
+# plt.plot(range(2, 10), wcss, marker='o')
+# plt.title("Elbow Method - Optimal K for KMeans")
+# plt.xlabel("Number of clusters")
+# plt.ylabel("WCSS")
+# plt.grid(True)
+# plt.show()
+
+#  1. Heatmap of Cluster Feature Averages (KMeans)
+numeric_data = df[num_cols + ['KMeans_Cluster']]
+cluster_means = numeric_data.groupby('KMeans_Cluster').mean()
+
+plt.figure(figsize=(12, 6))
+sns.heatmap(cluster_means.T, cmap='coolwarm', annot=True, fmt=".2f", linewidths=0.5)
+plt.title("Cluster Feature Means (KMeans)")
+plt.xlabel("Cluster")
+plt.ylabel("Features")
+plt.tight_layout()
 plt.show()
 
-# t-SNE for better visualization of customer segments
+#  2. t-SNE + Pairplot Visualization
 tsne = TSNE(n_components=2, random_state=0)
 X_tsne = tsne.fit_transform(X_processed)
 
-plt.figure(figsize=(8, 6))
-sns.scatterplot(x=X_tsne[:, 0], y=X_tsne[:, 1], hue=kmeans_labels, palette='Set2')
-plt.title('t-SNE - Customer Segments')
-plt.xlabel('t-SNE Component 1')
-plt.ylabel('t-SNE Component 2')
-plt.legend(title='Cluster')
+# Add t-SNE results and cluster labels to DataFrame
+tsne_df = pd.DataFrame(X_tsne, columns=['TSNE1', 'TSNE2'])
+tsne_df['Cluster'] = kmeans_labels
+
+sns.pairplot(tsne_df, hue='Cluster', palette='Set2', plot_kws={'alpha': 0.6})
+plt.suptitle("Pairplot - t-SNE Components by Cluster", y=1.02)
 plt.show()
 
-# Model Evaluation for Clustering
-
-# Silhouette Score for KMeans
-sil_score_kmeans = silhouette_score(X_pca, kmeans_labels)
-print(f"Silhouette Score for K-Means: {sil_score_kmeans:.2f}")
-
-# Davies-Bouldin Index for KMeans
-dbi_kmeans = davies_bouldin_score(X_pca, kmeans_labels)
-print(f"Davies-Bouldin Index for K-Means: {dbi_kmeans:.2f}")
-
-# WCSS (Within-Cluster Sum of Squares) for KMeans
-wcss = []
-for k in range(2, 10):
-    kmeans = KMeans(n_clusters=k, random_state=0)
-    kmeans.fit(X_pca)
-    wcss.append(kmeans.inertia_)
-
-plt.figure(figsize=(8, 5))
-plt.plot(range(2, 10), wcss, marker='o')
-plt.title('Elbow Method to Determine Optimal k (K-Means)')
-plt.xlabel('Number of clusters')
-plt.ylabel('WCSS')
-plt.grid(True)
-plt.show()
-
-# Train Random Forest Classifier model
+#  Random Forest Classifier
 X = preprocessor.transform(df.drop(columns=['y', 'KMeans_Cluster', 'DBSCAN_Cluster']))
 y = df['y']
 
@@ -102,13 +105,13 @@ X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_
 clf = RandomForestClassifier(random_state=0)
 clf.fit(X_train, y_train)
 
-# Save classifier model
+# Save classifier
 joblib.dump(clf, "Models/rf_model.pkl")
 
 # Evaluate classifier
 y_pred = clf.predict(X_test)
-print(classification_report(y_test, y_pred))
+print("Classification Report:\n", classification_report(y_test, y_pred))
 print(f"Accuracy: {accuracy_score(y_test, y_pred):.2f}")
 
-# Save the updated DataFrame
+# Save final dataset with cluster labels
 df.to_csv("Dataset/clustered_bank_data.csv", index=False)
