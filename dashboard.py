@@ -1,129 +1,107 @@
 import streamlit as st
 import pandas as pd
-import joblib
 import matplotlib.pyplot as plt
 import seaborn as sns
-from sklearn.metrics import silhouette_score, davies_bouldin_score
+import joblib
 from sklearn.manifold import TSNE
-from sklearn.cluster import KMeans, DBSCAN
 
-# Load saved models
-preprocessor = joblib.load("Models/preprocessor.pkl")
-kmeans = joblib.load("Models/kmeans.pkl")
-dbscan = joblib.load("Models/dbscan.pkl")
-pca = joblib.load("Models/pca.pkl")
-rf_model = joblib.load("Models/rf_model.pkl")
+# Load models once
+@st.cache_resource
+def load_models():
+    preprocessor = joblib.load("Models/preprocessor.pkl")
+    pca = joblib.load("Models/pca.pkl")
+    kmeans = joblib.load("Models/kmeans.pkl")
+    rf_model = joblib.load("Models/rf_model.pkl")
+    return preprocessor, pca, kmeans, rf_model
 
-# Load the dataset
-df = pd.read_csv("Dataset/bank-additional-full.csv")
+preprocessor, pca, kmeans, rf_model = load_models()
 
-# Preprocessing data
-num_cols = df.select_dtypes(include=['int64', 'float64']).columns.tolist()
-cat_cols = df.select_dtypes(include=['object']).columns.tolist()
+st.title("Interactive Customer Segmentation & Prediction Dashboard")
 
-# Apply preprocessor
-X_processed = preprocessor.transform(df.drop(columns=['y']))
+# Upload data
+uploaded_file = st.file_uploader("Upload Customer Data CSV", type=["csv"])
+if uploaded_file:
+    df = pd.read_csv(uploaded_file)
+    st.success(f"Loaded data with {df.shape[0]} rows and {df.shape[1]} columns")
 
-# Apply PCA for 2D representation
-X_pca = pca.transform(X_processed)
+    # Preprocess input (drop target if exists)
+    df_input = df.drop(columns=['y'], errors='ignore')
+    X_processed = preprocessor.transform(df_input)
 
-# Apply t-SNE for visualization
-tsne = TSNE(n_components=2, random_state=0)
-X_tsne = tsne.fit_transform(X_processed)
-
-# Streamlit Dashboard
-st.title("Customer Journey Analysis Dashboard")
-st.write("Explore customer behavior through clustering and dimensionality reduction.")
-
-# Sidebar for user inputs
-st.sidebar.header("Clustering & Dimensionality Reduction Settings")
-cluster_method = st.sidebar.selectbox("Select Clustering Method", ["K-Means", "DBSCAN"])
-dim_method = st.sidebar.selectbox("Select Dimensionality Reduction Method", ["PCA", "t-SNE"])
-
-# Apply selected clustering
-if cluster_method == "K-Means":
-    st.subheader("K-Means Clustering Visualization")
+    # Clustering & Dimensionality Reduction
+    X_pca = pca.transform(X_processed)
     kmeans_labels = kmeans.predict(X_pca)
-    plt.figure(figsize=(8, 6))
-    sns.scatterplot(x=X_pca[:, 0], y=X_pca[:, 1], hue=kmeans_labels, palette='Set2')
-    plt.title("K-Means Clustering - PCA Projection")
-    plt.xlabel('Principal Component 1')
-    plt.ylabel('Principal Component 2')
-    plt.legend(title='Cluster')
-    st.pyplot(plt)
+    df['KMeans_Cluster'] = kmeans_labels
 
-elif cluster_method == "DBSCAN":
-    st.subheader("DBSCAN Clustering Visualization")
-    dbscan_labels = dbscan.fit_predict(X_pca)
-    plt.figure(figsize=(8, 6))
-    sns.scatterplot(x=X_pca[:, 0], y=X_pca[:, 1], hue=dbscan_labels, palette='Set2')
-    plt.title("DBSCAN Clustering - PCA Projection")
-    plt.xlabel('Principal Component 1')
-    plt.ylabel('Principal Component 2')
-    plt.legend(title='Cluster')
-    st.pyplot(plt)
+    # Classification Prediction (if 'y' missing)
+    if 'y' not in df.columns:
+        y_pred = rf_model.predict(X_processed)
+        df['Predicted_Response'] = y_pred
 
-# Visualization for Dimensionality Reduction
-if dim_method == "PCA":
+    # Sidebar Filters
+    st.sidebar.header("Filter Options")
+    clusters = sorted(df['KMeans_Cluster'].unique())
+    selected_clusters = st.sidebar.multiselect("Select Clusters to Display", clusters, default=clusters)
+
+    # Filter dataframe based on selection
+    filtered_df = df[df['KMeans_Cluster'].isin(selected_clusters)]
+
+    st.subheader("Filtered Data Preview")
+    st.dataframe(filtered_df.head(50))
+
+    # Cluster counts bar chart
+    st.subheader("Customer Count per Cluster")
+    cluster_counts = filtered_df['KMeans_Cluster'].value_counts().sort_index()
+    fig, ax = plt.subplots()
+    sns.barplot(x=cluster_counts.index, y=cluster_counts.values, palette='Set2', ax=ax)
+    ax.set_xlabel("Cluster")
+    ax.set_ylabel("Number of Customers")
+    ax.set_title("Customer Count per Cluster")
+    st.pyplot(fig)
+
+    # Heatmap of Feature Means per Cluster
+    st.subheader("Cluster Feature Means Heatmap")
+    # Use numeric columns only (skip cluster and prediction columns)
+    num_cols = filtered_df.select_dtypes(include=['int64', 'float64']).columns.drop(['KMeans_Cluster'], errors='ignore').tolist()
+    cluster_means = filtered_df.groupby('KMeans_Cluster')[num_cols].mean()
+
+    fig2, ax2 = plt.subplots(figsize=(12, 6))
+    sns.heatmap(cluster_means.T, cmap='coolwarm', annot=True, fmt=".2f", linewidths=0.5, ax=ax2)
+    ax2.set_xlabel("Cluster")
+    ax2.set_ylabel("Features")
+    st.pyplot(fig2)
+
+    # PCA scatter plot colored by cluster
     st.subheader("PCA Visualization")
-    plt.figure(figsize=(8, 6))
-    sns.scatterplot(x=X_pca[:, 0], y=X_pca[:, 1], hue=kmeans.predict(X_pca), palette='Set2')
-    plt.title("PCA - Customer Segments")
-    plt.xlabel('Principal Component 1')
-    plt.ylabel('Principal Component 2')
-    plt.legend(title='Cluster')
-    st.pyplot(plt)
+    fig3, ax3 = plt.subplots()
+    sns.scatterplot(x=X_pca[:, 0], y=X_pca[:, 1], hue=kmeans_labels, palette='Set2', ax=ax3, alpha=0.7)
+    ax3.set_xlabel("Principal Component 1")
+    ax3.set_ylabel("Principal Component 2")
+    ax3.set_title("Customer Segments - PCA Projection")
+    ax3.legend(title='Cluster')
+    st.pyplot(fig3)
 
-elif dim_method == "t-SNE":
+    # t-SNE Visualization toggle
     st.subheader("t-SNE Visualization")
-    plt.figure(figsize=(8, 6))
-    sns.scatterplot(x=X_tsne[:, 0], y=X_tsne[:, 1], hue=kmeans.predict(X_pca), palette='Set2')
-    plt.title("t-SNE - Customer Segments")
-    plt.xlabel('t-SNE Component 1')
-    plt.ylabel('t-SNE Component 2')
-    plt.legend(title='Cluster')
-    st.pyplot(plt)
+    if st.button("Run t-SNE (takes a few seconds)"):
+        tsne = TSNE(n_components=2, random_state=0, n_iter=1000)
+        X_tsne = tsne.fit_transform(X_processed)
 
-# Clustering Evaluation Metrics
-st.sidebar.header("Clustering Evaluation Metrics")
-if st.sidebar.button("Evaluate Clustering"):
+        fig4, ax4 = plt.subplots()
+        sns.scatterplot(x=X_tsne[:, 0], y=X_tsne[:, 1], hue=kmeans_labels, palette='Set2', ax=ax4, alpha=0.7)
+        ax4.set_xlabel("t-SNE Component 1")
+        ax4.set_ylabel("t-SNE Component 2")
+        ax4.set_title("Customer Segments - t-SNE Projection")
+        ax4.legend(title='Cluster')
+        st.pyplot(fig4)
 
-    # Silhouette Score for K-Means
-    sil_score_kmeans = silhouette_score(X_pca, kmeans_labels)
-    st.write(f"Silhouette Score for K-Means: {sil_score_kmeans:.2f}")
-
-    # Davies-Bouldin Index for K-Means
-    dbi_kmeans = davies_bouldin_score(X_pca, kmeans_labels)
-    st.write(f"Davies-Bouldin Index for K-Means: {dbi_kmeans:.2f}")
-
-    # WCSS (Within-Cluster Sum of Squares) for KMeans
-    wcss = []
-    for k in range(2, 10):
-        kmeans_temp = KMeans(n_clusters=k, random_state=0)
-        kmeans_temp.fit(X_pca)
-        wcss.append(kmeans_temp.inertia_)
-
-    st.subheader('WCSS (Within-Cluster Sum of Squares) for K-Means')
-    plt.figure(figsize=(8, 5))
-    plt.plot(range(2, 10), wcss, marker='o')
-    plt.title('Elbow Method to Determine Optimal k (K-Means)')
-    plt.xlabel('Number of clusters')
-    plt.ylabel('WCSS')
-    plt.grid(True)
-    st.pyplot(plt)
-
-# Model Prediction
-st.sidebar.header("Model Prediction")
-if st.sidebar.button("Predict Customer Outcome"):
-
-    # Sample a random customer
-    sample = df.drop(columns=['y']).sample(1)
-    X_sample = preprocessor.transform(sample)
-    
-    # Predict using the Random Forest model
-    prediction = rf_model.predict(X_sample)
-    st.write(f"Predicted Outcome for Sample Customer: {prediction[0]}")
-    
-    # Show customer data for the prediction
-    st.write("Sample Customer Data:")
-    st.write(sample)
+    # Download filtered dataset
+    csv = filtered_df.to_csv(index=False).encode('utf-8')
+    st.download_button(
+        label="Download Filtered Clustered Data as CSV",
+        data=csv,
+        file_name='filtered_clustered_customers.csv',
+        mime='text/csv'
+    )
+else:
+    st.info("Please upload a CSV file to start.")
